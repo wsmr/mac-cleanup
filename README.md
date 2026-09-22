@@ -57,7 +57,7 @@ actually be installed — anything missing is just skipped.
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/mac-cleanup.git
+git clone https://github.com/wsmr/mac-cleanup.git
 cd mac-cleanup
 chmod +x mac-cleanup.sh
 ```
