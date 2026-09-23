@@ -10,23 +10,61 @@ clears out exactly that — and nothing else — with one command.
 ## Why not just use a general-purpose cleaner?
 
 Most "Mac cleaner" apps either ask for broad system access, clean things
-you can't verify, or bury their behavior in a GUI. This is one ~450-line
+you can't verify, or bury their behavior in a GUI. This is one ~550-line
 bash file you can read start to finish in a few minutes, with no
 dependencies beyond tools already on your Mac.
 
+## v2.0.0: what changed, and why
+
+This script went through an independent second-opinion review after the
+first release. That review found real issues — the kind you want a second
+pair of eyes to catch on a tool that deletes files. v2.0.0 fixes all of
+them:
+
+- **Trash emptying is now opt-in** (`--empty-trash`, off by default).
+  Finder's "empty trash" clears every *mounted volume's* trash, not just
+  this Mac's — an external drive plugged in at the time would lose its
+  trash too. That's a bigger blast radius than "regenerable cache," so it
+  no longer runs by default.
+- **JetBrains Toolbox `*-backup` folders are now opt-in**
+  (`--include-jetbrains-backups`, off by default). These aren't cache —
+  they're a full snapshot of your previous IDE settings (keymaps, saved
+  database connections, live templates) kept specifically as a rollback
+  point during an IDE update.
+- **Crash-dump matching is narrower.** Previously any `~/*.hprof` file was
+  removed; now only the patterns JVMs/JetBrains actually auto-generate
+  (`java_error_in_*.hprof`, `java_pid*.hprof`) are touched, so a heap dump
+  you made on purpose for debugging is left alone.
+- **Deletion failures are no longer misreported as successes.** Every
+  per-file removal now checks `rm`'s exit status before logging "removed"
+  or counting it toward the freed-space total.
+- **A malformed `$HOME` is refused outright**, rather than silently
+  falling back to a system-wide path.
+- **Symlinked cache folders are handled correctly** — if you've moved a
+  cache directory to an external drive and symlinked it back, the script
+  now measures and cleans what it actually points to, not just the
+  symlink itself.
+- Before touching the JetBrains cache or Gradle's temp folder, it now
+  prints an advisory (not a block) if a related process looks like it
+  might be running.
+
+If you're on v1, the practical difference is: run `--empty-trash` and
+`--include-jetbrains-backups` explicitly if you want the old default
+behavior back for those two specifically.
+
 ## What it touches
 
-| Step | What it clears | Command used under the hood |
+| Step | What it clears | Default |
 |---|---|---|
-| npm cache | `~/.npm` | `npm cache clean --force` |
-| pip cache | `~/Library/Caches/pip` | `python3 -m pip cache purge` |
-| Homebrew | old cellar versions & download cache | `brew cleanup -s` |
-| JetBrains cache | `~/Library/Caches/JetBrains/*` | plain delete |
-| JetBrains backups | `~/Library/Application Support/JetBrains/*-backup` | plain delete |
-| Sparkle leftovers | `~/Library/Caches/*/org.sparkle-project.Sparkle` | plain delete |
-| Crash dumps | `~/*.hprof` | plain delete |
-| Gradle scratch | `~/.gradle/.tmp/*` | plain delete |
-| Trash | `~/.Trash` | via Finder (AppleScript), never touched directly |
+| npm cache | `~/.npm` | on |
+| pip cache | `~/Library/Caches/pip` | on |
+| Homebrew | old cellar versions & download cache | on |
+| JetBrains cache | `~/Library/Caches/JetBrains/*` | on |
+| Sparkle leftovers | `~/Library/Caches/*/org.sparkle-project.Sparkle` | on |
+| Crash dumps | `~/java_error_in_*.hprof`, `~/java_pid*.hprof` | on |
+| Gradle scratch | `~/.gradle/.tmp/*` | on |
+| JetBrains settings-backups | `~/Library/Application Support/JetBrains/*-backup` | **opt-in** |
+| Trash | every mounted volume's trash, via Finder | **opt-in** |
 
 Every step is skipped gracefully (not an error) if the relevant tool or
 folder isn't present on your machine.
@@ -44,7 +82,8 @@ On purpose, because these need a human decision, not a script:
   worth reviewing by hand occasionally, not something to automate
 - Personal files, SSH/GPG keys, app signing keystores
 
-It also never asks for or uses `sudo`.
+It also never asks for or uses `sudo`, and refuses to run at all if
+`$HOME` isn't set to a real, sane directory.
 
 ## Requirements
 
@@ -65,7 +104,7 @@ chmod +x mac-cleanup.sh
 ## Usage
 
 ```bash
-./mac-cleanup.sh              # run everything
+./mac-cleanup.sh              # run the default safe cleanup
 ./mac-cleanup.sh --dry-run    # preview only — deletes nothing
 ```
 
@@ -82,15 +121,15 @@ remove and roughly how much space it would free, with zero side effects.
 | `--skip-pip` | Skip the pip cache |
 | `--skip-brew` | Skip Homebrew cleanup |
 | `--skip-jetbrains-cache` | Skip `~/Library/Caches/JetBrains` |
-| `--skip-jetbrains-backups` | Skip JetBrains Toolbox's `*-backup` folders |
 | `--skip-sparkle` | Skip leftover Sparkle auto-updater downloads |
-| `--skip-crash-dumps` | Skip `*.hprof` crash dumps in `$HOME` |
+| `--skip-crash-dumps` | Skip auto-generated `.hprof` crash dumps |
 | `--skip-gradle-tmp` | Skip `~/.gradle/.tmp` |
-| `--skip-trash` | Skip emptying the Trash |
+| `--include-jetbrains-backups` | Opt in to removing JetBrains's `*-backup` folders |
+| `--empty-trash` | Opt in to emptying the Trash (every mounted volume) |
 | `-h`, `--help` | Show full usage |
 | `-v`, `--version` | Show version |
 
-Every flag is combinable, e.g. `./mac-cleanup.sh --skip-trash --quiet`.
+Every flag is combinable, e.g. `./mac-cleanup.sh --empty-trash --quiet`.
 
 ### Example output
 
@@ -103,23 +142,24 @@ DRY RUN — nothing below will actually be deleted.
 --- pip cache ---
   would run: python3 -m pip cache purge  (currently: 340 MB)
 --- Homebrew ---
-  would run: brew cleanup -s  (cache currently: 410 MB)
+  would run: brew cleanup -s  (cache: 410 MB, cellar: 1.2 GB)
+  dry-run estimate is cache-only — cellar cleanup varies too much to predict
 --- JetBrains IDE cache ---
   would clear: /Users/you/Library/Caches/JetBrains  (currently: 1.8 GB)
---- JetBrains Toolbox settings-backups ---
-  would remove: /Users/you/Library/Application Support/JetBrains/WebStorm2024.2-backup  (610 MB)
+--- JetBrains Toolbox settings-backups (opt-in) ---
+  skipped — these hold real settings, not cache. Opt in with
+  --include-jetbrains-backups if you're sure you don't need them.
 --- Leftover Sparkle auto-updater downloads ---
   none found.
---- Crash dumps in $HOME ---
+--- Auto-generated crash dumps in $HOME ---
   would remove: /Users/you/java_error_in_webstorm.hprof  (2.0 GB)
 --- Gradle scratch temp folder ---
   would clear: /Users/you/.gradle/.tmp  (currently: 221 MB)
---- Trash ---
-  would empty the Trash via Finder. (Size can't be previewed — ~/.Trash
-  is protected from direct inspection the same way it's protected from
-  find/rm; not included in the dry-run total.)
+--- Trash (opt-in) ---
+  skipped — this empties every mounted volume's trash, not just
+  this Mac's. Opt in with --empty-trash if that's what you want.
 
-Dry run complete — would free approximately 7.4 GB (Trash not included; see above).
+Dry run complete — would free approximately 6.5 GB (Trash excluded from every total; see above).
 ```
 
 ## Suggested alias
@@ -131,17 +171,18 @@ source ~/.zshrc
 
 ## Continuous integration
 
-Every push and pull request touching a `.sh` file runs
-[ShellCheck](https://www.shellcheck.net/) via GitHub Actions
+Every push and pull request touching a `.sh` file, or the workflow file
+itself, runs [ShellCheck](https://www.shellcheck.net/) via GitHub Actions
 (`.github/workflows/shellcheck.yml`). The script currently passes with zero
 warnings.
 
 ## Contributing
 
 Issues and pull requests are welcome. If you're adding a new cleanup step,
-please keep the two rules the existing ones follow: it only ever removes
-things that regenerate automatically or hold no unique data, and it never
-requires `sudo`.
+please keep the rules the existing ones follow: default-on only for things
+that are pure cache with zero unique data; anything that could hold real
+user data is opt-in; every deletion checks its own exit status before
+being reported as freed; and it never requires `sudo`.
 
 ## License
 
